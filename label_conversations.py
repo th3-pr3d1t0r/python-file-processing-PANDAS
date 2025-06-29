@@ -92,49 +92,88 @@ else:
     labeled_message_ids = set()
 
 # -------------------------------
-# Streamlit App UI
+# Main Streamlit App
 # -------------------------------
 
-st.title("🔍 Per-Message Intent Labeling Tool")
+st.title("🔍 Conversation Intent Labeling Tool")
 
-unlabeled_messages = []
+# -------------------------------
+# Find next conversation that isn't fully labeled
+# -------------------------------
+unlabeled_conversations = []
 for conv_id, conv_df in df.groupby(ORIGINAL_CONVERSATION_ID_COL):
-    for _, row in conv_df.iterrows():
-        message = row['parsed_message_content']
-        speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
-        if (conv_id, message) not in labeled_message_ids:
-            unlabeled_messages.append((conv_id, speaker, message))
+    # check if ANY message in this conversation is unlabeled
+    if any((conv_id, msg) not in labeled_message_ids 
+           for msg in conv_df['parsed_message_content']):
+        unlabeled_conversations.append((conv_id, conv_df))
 
-if not unlabeled_messages:
-    st.success("🎉 All messages have been labeled! You're done.")
+total_unlabeled_messages = sum(
+    1 for conv_id, conv_df in unlabeled_conversations 
+    for msg in conv_df['parsed_message_content'] 
+    if (conv_id, msg) not in labeled_message_ids
+)
+
+if not unlabeled_conversations:
+    st.success("🎉 All conversations have been labeled!")
     st.stop()
 
-current_conv_id, current_speaker, current_message = unlabeled_messages[0]
+current_conv_id, current_conv_df = unlabeled_conversations[0]
+
+st.markdown(f"### Conversation ID: `{current_conv_id}`")
+st.markdown(f"⏳ **{total_unlabeled_messages} messages left to label**")
+
+st.divider()
 
 # -------------------------------
-# Display message with background
+# Show messages with option to override
 # -------------------------------
+message_intent_overrides = {}
 
-color = "#f8d7da" if current_speaker == "Customer" else "#d4edda"
-st.markdown(f"""
-<div style="background-color: {color}; padding: 10px; border-radius: 5px; margin: 5px 0;">
-    <strong>{current_speaker}:</strong> {current_message}
-</div>
-""", unsafe_allow_html=True)
+for idx, row in current_conv_df.iterrows():
+    message = row['parsed_message_content']
+    speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
+
+    color = "#f8d7da" if speaker == "Customer" else "#d4edda"
+    st.markdown(f"""
+    <div style="background-color: {color}; padding: 10px; border-radius: 5px; margin: 5px 0;">
+        <strong>{speaker}:</strong> {message}
+    </div>
+    """, unsafe_allow_html=True)
+
+    if (current_conv_id, message) not in labeled_message_ids:
+        selected_intent = st.selectbox(
+            f"Override intent for this message? (or leave as default below)",
+            ["(Use default)"] + INTENT_OPTIONS,
+            key=f"{current_conv_id}_{idx}"
+        )
+        if selected_intent != "(Use default)":
+            message_intent_overrides[message] = selected_intent
+
+st.divider()
 
 # -------------------------------
-# Labeling controls
+# Default conversation intent
 # -------------------------------
+st.markdown("### Default intent for all messages not explicitly overridden")
+default_intent = st.selectbox("Select default intent:", INTENT_OPTIONS)
 
-selected_intent = st.selectbox("Select the intent for this message:", INTENT_OPTIONS)
-
-if st.button("Save Intent & Next"):
-    new_row = {
-        ORIGINAL_CONVERSATION_ID_COL: current_conv_id,
-        'Speaker': current_speaker,
-        'Message': current_message,
-        'Intent': selected_intent
-    }
-    labeled_df = pd.concat([labeled_df, pd.DataFrame([new_row])], ignore_index=True)
-    labeled_df.to_csv(OUTPUT_CSV_PATH, index=False)
-    st.rerun()
+# -------------------------------
+# Save logic
+# -------------------------------
+if st.button("✅ Save intents for this conversation & next"):
+    new_rows = []
+    for _, row in current_conv_df.iterrows():
+        message = row['parsed_message_content']
+        speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
+        if (current_conv_id, message) not in labeled_message_ids:
+            intent = message_intent_overrides.get(message, default_intent)
+            new_rows.append({
+                ORIGINAL_CONVERSATION_ID_COL: current_conv_id,
+                'Speaker': speaker,
+                'Message': message,
+                'Intent': intent
+            })
+    if new_rows:
+        labeled_df = pd.concat([labeled_df, pd.DataFrame(new_rows)], ignore_index=True)
+        labeled_df.to_csv(OUTPUT_CSV_PATH, index=False)
+    st.experimental_rerun()
