@@ -125,13 +125,11 @@ if selected_intent != "Skip":
                 'Message': message,
                 'Intent': selected_intent
             })
-        # Append to labeled dataframe & save
         labeled_df = pd.concat([labeled_df, pd.DataFrame(new_rows)], ignore_index=True)
         labeled_df.to_csv(OUTPUT_CSV_PATH, index=False)
-        st.experimental_rerun()
+        st.rerun()
 else:
     if st.button("Skip and Next"):
-        # Just mark it as seen by adding empty rows with intent "Skipped"
         new_rows = []
         for _, row in current_conv_df.iterrows():
             speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
@@ -144,4 +142,4 @@ else:
             })
         labeled_df = pd.concat([labeled_df, pd.DataFrame(new_rows)], ignore_index=True)
         labeled_df.to_csv(OUTPUT_CSV_PATH, index=False)
-        st.experimental_rerun()
+        st.rerun()
