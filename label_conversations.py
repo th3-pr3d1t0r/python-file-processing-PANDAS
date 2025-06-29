@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import re
 
 # -------------------------------
 # Configuration
 # -------------------------------
 INPUT_CSV_PATH = "Ugochukwu.csv"
-OUTPUT_CSV_PATH = "labeled_output.csv"
+OUTPUT_CSV_PATH = "labeled_output_per_message.csv"
 
 ORIGINAL_CONVERSATION_ID_COL = 'conversation_id'
 ORIGINAL_ACTOR_TYPE_COL = 'actor_type'
@@ -15,7 +16,8 @@ ORIGINAL_MESSAGE_PARTS_COL = 'message_parts'
 
 SPEAKER_MAPPING = {
     'user': 'Customer',
-    'agent': 'Agent'
+    'agent': 'Agent',
+    'bot': 'Agent'
 }
 
 INTENT_OPTIONS = [
@@ -54,7 +56,11 @@ def extract_message_content(message_parts_str):
                 content_pieces.append(f"[File: {part['file'].get('name', 'Unknown')}]")
         return " ".join(content_pieces).strip()
     except Exception:
-        return message_parts_str[:100]  # fallback snippet
+        return message_parts_str[:100]
+
+def clean_html(raw_html):
+    cleanr = re.compile('<.*?>')
+    return re.sub(cleanr, '', raw_html)
 
 # -------------------------------
 # Load Data
@@ -67,10 +73,10 @@ def load_data():
         st.stop()
     df = pd.read_csv(INPUT_CSV_PATH)
     df['parsed_message_content'] = df[ORIGINAL_MESSAGE_PARTS_COL].apply(extract_message_content)
+    df['parsed_message_content'] = df['parsed_message_content'].apply(clean_html)
     return df
 
 df = load_data()
-conversations_grouped = df.groupby(ORIGINAL_CONVERSATION_ID_COL)
 
 # -------------------------------
 # Load or Initialize labeled data
@@ -78,68 +84,57 @@ conversations_grouped = df.groupby(ORIGINAL_CONVERSATION_ID_COL)
 
 if os.path.exists(OUTPUT_CSV_PATH):
     labeled_df = pd.read_csv(OUTPUT_CSV_PATH)
-    labeled_conversation_ids = set(labeled_df[ORIGINAL_CONVERSATION_ID_COL].unique())
+    labeled_message_ids = set(zip(labeled_df[ORIGINAL_CONVERSATION_ID_COL], labeled_df['Message']))
 else:
     labeled_df = pd.DataFrame(columns=[
         ORIGINAL_CONVERSATION_ID_COL, 'Speaker', 'Message', 'Intent'
     ])
-    labeled_conversation_ids = set()
+    labeled_message_ids = set()
 
 # -------------------------------
 # Streamlit App UI
 # -------------------------------
 
-st.title("Conversation Intent Labeling Tool")
+st.title("🔍 Per-Message Intent Labeling Tool")
 
-remaining_conversations = [conv_id for conv_id in conversations_grouped.groups.keys() if conv_id not in labeled_conversation_ids]
+unlabeled_messages = []
+for conv_id, conv_df in df.groupby(ORIGINAL_CONVERSATION_ID_COL):
+    for _, row in conv_df.iterrows():
+        message = row['parsed_message_content']
+        speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
+        if (conv_id, message) not in labeled_message_ids:
+            unlabeled_messages.append((conv_id, speaker, message))
 
-if not remaining_conversations:
-    st.success("🎉 All conversations have been labeled! You’re done.")
+if not unlabeled_messages:
+    st.success("🎉 All messages have been labeled! You're done.")
     st.stop()
 
-# Pick next conversation
-current_conv_id = remaining_conversations[0]
-current_conv_df = conversations_grouped.get_group(current_conv_id)
+current_conv_id, current_speaker, current_message = unlabeled_messages[0]
 
-# Display conversation
-st.subheader(f"Conversation ID: {current_conv_id}")
+# -------------------------------
+# Display message with background
+# -------------------------------
 
-for _, row in current_conv_df.iterrows():
-    speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
-    message = row['parsed_message_content']
-    st.markdown(f"**{speaker}:** {message}")
+color = "#f8d7da" if current_speaker == "Customer" else "#d4edda"
+st.markdown(f"""
+<div style="background-color: {color}; padding: 10px; border-radius: 5px; margin: 5px 0;">
+    <strong>{current_speaker}:</strong> {current_message}
+</div>
+""", unsafe_allow_html=True)
 
+# -------------------------------
 # Labeling controls
-selected_intent = st.selectbox("Select the intent for this conversation:", ["Skip"] + INTENT_OPTIONS)
+# -------------------------------
 
-if selected_intent != "Skip":
-    if st.button("Save Intent & Next"):
-        # Build labeled rows
-        new_rows = []
-        for _, row in current_conv_df.iterrows():
-            speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
-            message = row['parsed_message_content']
-            new_rows.append({
-                ORIGINAL_CONVERSATION_ID_COL: current_conv_id,
-                'Speaker': speaker,
-                'Message': message,
-                'Intent': selected_intent
-            })
-        labeled_df = pd.concat([labeled_df, pd.DataFrame(new_rows)], ignore_index=True)
-        labeled_df.to_csv(OUTPUT_CSV_PATH, index=False)
-        st.rerun()
-else:
-    if st.button("Skip and Next"):
-        new_rows = []
-        for _, row in current_conv_df.iterrows():
-            speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
-            message = row['parsed_message_content']
-            new_rows.append({
-                ORIGINAL_CONVERSATION_ID_COL: current_conv_id,
-                'Speaker': speaker,
-                'Message': message,
-                'Intent': "Skipped"
-            })
-        labeled_df = pd.concat([labeled_df, pd.DataFrame(new_rows)], ignore_index=True)
-        labeled_df.to_csv(OUTPUT_CSV_PATH, index=False)
-        st.rerun()
+selected_intent = st.selectbox("Select the intent for this message:", INTENT_OPTIONS)
+
+if st.button("Save Intent & Next"):
+    new_row = {
+        ORIGINAL_CONVERSATION_ID_COL: current_conv_id,
+        'Speaker': current_speaker,
+        'Message': current_message,
+        'Intent': selected_intent
+    }
+    labeled_df = pd.concat([labeled_df, pd.DataFrame([new_row])], ignore_index=True)
+    labeled_df.to_csv(OUTPUT_CSV_PATH, index=False)
+    st.rerun()
