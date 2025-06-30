@@ -31,6 +31,7 @@ INTENT_OPTIONS = [
     "General Acknowledgment / Closing",
     "Greeting",
     "Other",
+    "Empty Chat",
     "system message",
     "Transaction history"
 ]
@@ -92,27 +93,26 @@ else:
     labeled_message_ids = set()
 
 # -------------------------------
-# Main Streamlit App
-# -------------------------------
-
-st.title("Whatsapp Chat Conversation Intent Labeling Tool")
-
-# -------------------------------
 # Find next conversation that isn't fully labeled
 # -------------------------------
 unlabeled_conversations = []
 for conv_id, conv_df in df.groupby(ORIGINAL_CONVERSATION_ID_COL):
-    if any(
-        (conv_id, msg) not in labeled_message_ids 
-        for msg in conv_df['parsed_message_content']
-        if msg.strip()  # skip empty
-    ):
+    meaningful_msgs = [
+        msg for _, row in conv_df.iterrows()
+        if (msg := row['parsed_message_content']) 
+        and msg.strip()
+        and SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL]).lower() != "system"
+    ]
+    if any((conv_id, msg) not in labeled_message_ids for msg in meaningful_msgs):
         unlabeled_conversations.append((conv_id, conv_df))
 
 total_unlabeled_messages = sum(
     1 for conv_id, conv_df in unlabeled_conversations 
-    for msg in conv_df['parsed_message_content'] 
-    if (conv_id, msg) not in labeled_message_ids and msg.strip()
+    for _, row in conv_df.iterrows()
+    if (msg := row['parsed_message_content'])
+    and msg.strip()
+    and SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL]).lower() != "system"
+    and (conv_id, msg) not in labeled_message_ids
 )
 
 if not unlabeled_conversations:
@@ -135,10 +135,8 @@ for idx, row in current_conv_df.iterrows():
     message = row['parsed_message_content']
     speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
 
-    # Skip empty or system messages
-    if not message or not message.strip():
-        continue
-    if speaker.lower() == "system":
+    # Skip empty or purely system messages for labeling
+    if not message.strip() or speaker.lower() == "system":
         continue
 
     color = "#cc2634" if speaker == "Customer" else "#29c54d"
@@ -174,10 +172,7 @@ if st.button("✅ Save intents for this conversation & next"):
         message = row['parsed_message_content']
         speaker = SPEAKER_MAPPING.get(row[ORIGINAL_ACTOR_TYPE_COL], row[ORIGINAL_ACTOR_TYPE_COL])
 
-        # Skip empty or system messages
-        if not message or not message.strip():
-            continue
-        if speaker.lower() == "system":
+        if not message.strip() or speaker.lower() == "system":
             continue
 
         if (current_conv_id, message) not in labeled_message_ids:
